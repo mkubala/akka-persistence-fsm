@@ -1,35 +1,13 @@
 package pl.mkubala.akkaPersistenceFsm
 
+import akka.actor.Props
 import akka.persistence.fsm.PersistentFSM
-import akka.persistence.fsm.PersistentFSM.FSMState
+
+import pl.mkubala.akkaPersistenceFsm.MyCommand._
+import pl.mkubala.akkaPersistenceFsm.MyEvent._
+import pl.mkubala.akkaPersistenceFsm.MyState._
 
 import scala.reflect.ClassTag
-
-sealed trait MyState extends FSMState
-case object Positive extends MyState {
-  override def identifier: String = "Positive"
-}
-case object Negative extends MyState {
-  override def identifier: String = "Negative"
-}
-
-sealed trait MyCommand
-case object Increment extends MyCommand
-case class Add(n: Int) extends MyCommand {
-  require(n >= 0, "number must be >= 0")
-}
-case class Subtract(n: Int) extends MyCommand {
-  require(n >= 0, "number must be >= 0")
-}
-
-sealed trait MyEvent
-case object Incremented extends MyEvent
-case class Added(n: Int) extends MyEvent {
-  require(n >= 0, "number must be >= 0")
-}
-case class Subtracted(n: Int) extends MyEvent {
-  require(n >= 0, "number must be >= 0")
-}
 
 class PersistentFsmActor(implicit val domainEventClassTag: ClassTag[MyEvent])
   extends PersistentFSM[MyState, Int, MyEvent] {
@@ -56,14 +34,56 @@ class PersistentFsmActor(implicit val domainEventClassTag: ClassTag[MyEvent])
 
   when(Negative) {
     case Event(Increment, stateData) =>
-      if (stateData >= -1) goto(Positive) applying Incremented
-      else stay applying Incremented
+      val state =
+        if (stateData >= -1) goto(Positive) applying Incremented
+        else stay applying Incremented
+
+      log.info(s"Increment - outside. Value = $stateData")
+      state andThen { newStateData =>
+        log.info(s"Increment - inside of andThen. Value = $newStateData")
+      }
     case Event(Add(n), _) =>
       if (stateData + n >= 0) goto(Positive) applying Added(n)
       else stay applying Added(n)
     case Event(Subtract(n), stateData) =>
-      if (n > stateData) goto(Negative) applying Subtracted(n)
-      else stay applying Subtracted(n)
+      val state =
+        if (n > stateData) goto(Negative) applying Subtracted(n)
+        else stay applying Subtracted(n)
+
+      log.info(s"Subtract - outside. Value = $stateData")
+      state andThen { newStateData =>
+        log.info(s"Subtract - inside of andThen. Value = $newStateData")
+      }
   }
 
+  when(Sleeping) {
+    case Event(GoSleep, _) =>
+      stay
+    case Event(_, stateData) =>
+      stash()
+      val nextState = if (stateData >= 0) Positive else Negative
+      goto(nextState) andThen { _ =>
+        unstashAll()
+      }
+  }
+
+  whenUnhandled {
+    case Event(GoSleep, _) =>
+      log.info("Sleep - outside")
+      goto(Sleeping) andThen { _ =>
+        log.info("This will never be logged :(")
+      } andThen { _ =>
+        log.info("Sleep - inside of andThen")
+      }
+    case Event(Get, counterValue) =>
+      log.info("Get - outside")
+      stay replying counterValue andThen { _ =>
+        log.info("Get - inside of andThen")
+      }
+  }
+
+}
+
+object PersistentFsmActor {
+  def props: Props = Props(new PersistentFsmActor)
 }
